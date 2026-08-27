@@ -1,0 +1,281 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../app/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum UserStatus {
+  ACTIVE
+  DISABLED
+}
+
+enum PermissionRiskLevel {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum PermissionOverrideEffect {
+  ALLOW
+  DENY
+}
+
+enum AccessRiskType {
+  SENSITIVE_PERMISSION
+  INACTIVE_ACCOUNT
+  EXCESSIVE_PRIVILEGES
+}
+
+enum AccessRiskSeverity {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum AccessRiskStatus {
+  OPEN
+  RESOLVED
+}
+
+enum ApprovalRequesterType {
+  HUMAN
+  WEBMCP_AGENT
+}
+
+enum ApprovalActionType {
+  REVOKE_PERMISSION
+  DISABLE_USER
+  CHANGE_ROLE
+}
+
+enum ApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum AuditActorType {
+  HUMAN
+  WEBMCP_AGENT
+  SYSTEM
+}
+
+enum AuditSource {
+  WEB_APP
+  WEBMCP
+  SYSTEM
+}
+
+enum AuditActionType {
+  PERMISSION_REVOKED
+  USER_DISABLED
+  ROLE_CHANGED
+  RISK_DETECTED
+  RISK_RESOLVED
+  APPROVAL_CREATED
+  APPROVAL_APPROVED
+  APPROVAL_REJECTED
+}
+
+model Role {
+  id          String  @id @default(cuid())
+  name        String  @unique
+  slug        String  @unique
+  description String?
+
+  users       User[]
+  permissions RolePermission[]
+
+  newRoleApprovalRequests ApprovalRequest[] @relation("ApprovalNewRole")
+  auditLogs               AuditLog[]
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("roles")
+}
+
+model User {
+  id           String     @id @default(cuid())
+  name         String
+  email        String     @unique
+  status       UserStatus @default(ACTIVE)
+  roleId       String     @map("role_id")
+  lastActiveAt DateTime?  @map("last_active_at")
+
+  role Role @relation(fields: [roleId], references: [id], onDelete: Restrict)
+
+  permissionOverrides UserPermissionOverride[] @relation("OverrideUser")
+  grantedOverrides    UserPermissionOverride[] @relation("OverrideGrantedBy")
+  accessRisks         AccessRisk[]
+  requestedApprovals  ApprovalRequest[]         @relation("ApprovalRequestedBy")
+  targetedApprovals   ApprovalRequest[]         @relation("ApprovalTargetUser")
+  approvedRequests    ApprovalRequest[]         @relation("ApprovalApprovedBy")
+  actorAuditLogs      AuditLog[]                @relation("AuditActor")
+  targetAuditLogs     AuditLog[]                @relation("AuditTarget")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([roleId])
+  @@index([status])
+  @@index([lastActiveAt])
+  @@map("users")
+}
+
+model Permission {
+  id          String              @id @default(cuid())
+  name        String
+  slug        String              @unique
+  description String?
+  riskLevel   PermissionRiskLevel @default(LOW) @map("risk_level")
+
+  roles            RolePermission[]
+  userOverrides    UserPermissionOverride[]
+  accessRisks      AccessRisk[]
+  approvalRequests ApprovalRequest[]
+  auditLogs        AuditLog[]
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([riskLevel])
+  @@map("permissions")
+}
+
+model RolePermission {
+  roleId       String @map("role_id")
+  permissionId String @map("permission_id")
+
+  role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@id([roleId, permissionId])
+  @@map("role_permissions")
+}
+
+model UserPermissionOverride {
+  id String @id @default(cuid())
+
+  userId       String @map("user_id")
+  permissionId String @map("permission_id")
+  effect       PermissionOverrideEffect
+  reason       String?
+  grantedByUserId String? @map("granted_by_user_id")
+
+  user User @relation("OverrideUser", fields: [userId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+  grantedByUser User? @relation("OverrideGrantedBy", fields: [grantedByUserId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@unique([userId, permissionId])
+  @@index([userId])
+  @@index([permissionId])
+  @@map("user_permission_overrides")
+}
+
+model AccessRisk {
+  id          String @id @default(cuid())
+  fingerprint String @unique
+  userId       String @map("user_id")
+  permissionId String? @map("permission_id")
+
+  type        AccessRiskType
+  severity    AccessRiskSeverity
+  title       String
+  description String
+  status      AccessRiskStatus @default(OPEN)
+  detectedAt  DateTime @default(now()) @map("detected_at")
+  resolvedAt  DateTime? @map("resolved_at")
+
+  user       User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  permission Permission? @relation(fields: [permissionId], references: [id], onDelete: SetNull)
+
+  approvalRequests ApprovalRequest[]
+  auditLogs        AuditLog[]
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([userId])
+  @@index([status])
+  @@index([severity])
+  @@index([type])
+  @@map("access_risks")
+}
+
+model ApprovalRequest {
+  id String @id @default(cuid())
+
+  accessRiskId      String? @map("access_risk_id")
+  requestedByType   ApprovalRequesterType @map("requested_by_type")
+  requestedByUserId String? @map("requested_by_user_id")
+  actionType        ApprovalActionType @map("action_type")
+  targetUserId      String @map("target_user_id")
+  permissionId      String? @map("permission_id")
+  newRoleId         String? @map("new_role_id")
+  reason            String
+  status            ApprovalStatus @default(PENDING)
+  approvedByUserId  String? @map("approved_by_user_id")
+  requestedAt       DateTime @default(now()) @map("requested_at")
+  decidedAt         DateTime? @map("decided_at")
+
+  accessRisk     AccessRisk? @relation(fields: [accessRiskId], references: [id], onDelete: SetNull)
+  requestedByUser User? @relation("ApprovalRequestedBy", fields: [requestedByUserId], references: [id], onDelete: SetNull)
+  targetUser      User  @relation("ApprovalTargetUser", fields: [targetUserId], references: [id], onDelete: Cascade)
+  permission      Permission? @relation(fields: [permissionId], references: [id], onDelete: SetNull)
+  newRole         Role? @relation("ApprovalNewRole", fields: [newRoleId], references: [id], onDelete: SetNull)
+  approvedByUser  User? @relation("ApprovalApprovedBy", fields: [approvedByUserId], references: [id], onDelete: SetNull)
+  auditLogs       AuditLog[]
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([accessRiskId])
+  @@index([targetUserId])
+  @@index([status])
+  @@index([actionType])
+  @@map("approval_requests")
+}
+
+model AuditLog {
+  id String @id @default(cuid())
+
+  actorType          AuditActorType @map("actor_type")
+  actorUserId        String? @map("actor_user_id")
+  actionType         AuditActionType @map("action_type")
+  targetUserId       String? @map("target_user_id")
+  permissionId       String? @map("permission_id")
+  roleId             String? @map("role_id")
+  accessRiskId       String? @map("access_risk_id")
+  approvalRequestId  String? @map("approval_request_id")
+  source             AuditSource
+  beforeData         Json? @map("before_data")
+  afterData          Json? @map("after_data")
+  metadata           Json?
+
+  actorUser       User? @relation("AuditActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+  targetUser      User? @relation("AuditTarget", fields: [targetUserId], references: [id], onDelete: SetNull)
+  permission      Permission? @relation(fields: [permissionId], references: [id], onDelete: SetNull)
+  role            Role? @relation(fields: [roleId], references: [id], onDelete: SetNull)
+  accessRisk      AccessRisk? @relation(fields: [accessRiskId], references: [id], onDelete: SetNull)
+  approvalRequest ApprovalRequest? @relation(fields: [approvalRequestId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([actorUserId])
+  @@index([targetUserId])
+  @@index([actionType])
+  @@index([source])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
